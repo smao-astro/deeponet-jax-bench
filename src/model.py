@@ -36,21 +36,25 @@ class DeepONet(nn.Module):
             self.param('bias', nn.initializers.zeros, ())
         )
 
-    def __call__(self, branch_in, trunk_in, out_channels=1):
+    def __call__(self, branch_in, trunk_in):
+        """
+
+        (Lp,), (Lx,) -> () # for double vmap
+        (M, Lp), (Lx,) -> (M,) # for single vmap
+        (Lp,), (N, Lx,) -> (N,) # for single vmap
+        cartesian_prod==False: (MN, Lp), (MN, Lx) -> (MN,)
+        cartesian_prod==True: (M, Lp), (N, Lx) -> (M, N)
+
+        Returns:
+
+        """
         # forward of branch and trunk
         branch_out = self.branch(branch_in)
         trunk_out = nn.tanh(self.trunk(trunk_in))  # only trunk output is activated before einsum
-        # reshape for output channels
-        branch_out_channels = branch_out.reshape([branch_out.shape[0], out_channels, -1])
-        if trunk_out.ndim == 1:
-            # jvp case, only one point is sent
-            trunk_out = jnp.expand_dims(trunk_out, axis=0)
-        trunk_out_channels = trunk_out.reshape([trunk_out.shape[0], out_channels, -1])
-        # this IF should NOT affect efficiency because self.cartesian_prod is constant during training
-        if self.cartesian_prod:
-            out = jnp.einsum("bci,nci->bnc", branch_out_channels, trunk_out_channels)
-        else:
-            out = jnp.einsum("Nci,Nci->Nc", branch_out_channels, trunk_out_channels)
+        if self.cartesian_prod and branch_in.ndim == 2 and trunk_in.ndim == 2:
+            # (M, Lp), (N, Lx) -> (M, N)
+            branch_out = jnp.expand_dims(branch_out, axis=1)
+        out = jnp.sum(branch_out * trunk_out, axis=-1)
         out += self.bias
         # if out_channels is 1, squeeze this dimension
-        return out.squeeze()
+        return out
